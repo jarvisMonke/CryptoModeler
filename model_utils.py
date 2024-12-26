@@ -516,26 +516,46 @@ class pipeline:
     # Trains a model
     def train(self, epochs=50, batch_size=32):
 
-        # Create and compile model
+            # Callback to check NaNs in logs during training
+        class NaNChecker(tf.keras.callbacks.Callback):
+            def __init__(self, dropout_rate):
+                super().__init__()
+                self.dropout_rate = dropout_rate
+
+            def on_batch_end(self, batch, logs=None):
+                if logs is not None and any(np.isnan(value) for value in logs.values()):
+                    print(f"NaN detected in batch {batch}")
+                    self.model.stop_training = True
+                    logging.debug(f"Model has NaNs. Dropout rate: {self.dropout_rate}")
+            
+             # Learning rate monitor
+        class LearningRateMonitor(tf.keras.callbacks.Callback):
+            def on_epoch_end(self, epoch, logs=None):
+                lr = self.model.optimizer.learning_rate.numpy()
+                print(f" - learning Rate: {lr}")
+        
+        lr_monitor = LearningRateMonitor()
+
+        # Early stopping
+        early_stopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+
+        # Initialize NaNChecker with the dropout rate
+        nan_checker = NaNChecker(dropout_rate=self.dropout_rate)
+
+        # Create and compile the model
         height, length, width = self.X_train.shape
         model = create_model(input_shape=(length, width), dropout=self.dropout_rate)
 
-        # Assume X_train, y_train, X_val, y_val are defined elsewhere
-        early_stopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
-
-        # Callback to check NaNs in logs during training
-        class NaNChecker(tf.keras.callbacks.Callback):
-            def on_batch_end(self, batch, logs=None):
-                if any(np.isnan(value) for value in logs.values()):
-                    print(f"NaN detected in batch {batch}")
-                    self.model.stop_training = True
-                    logging.debug(f"Model has NaNs. dropout: {self.dropout}")
-
-        nan_checker = NaNChecker()
-
-        history = model.fit(self.X_train, self.y_train, epochs=epochs, batch_size=batch_size, 
-                        validation_split=0.1, 
-                        verbose=1, callbacks=[early_stopping, nan_checker])
+        # Train the model
+        history = model.fit(
+            self.X_train, 
+            self.y_train, 
+            epochs=epochs, 
+            batch_size=batch_size, 
+            validation_split=0.1, 
+            verbose=1, 
+            callbacks=[early_stopping, nan_checker, lr_monitor]
+        )
         self.model = model
     
     # save a model
@@ -600,7 +620,6 @@ def create_model(input_shape, dropout):
 
     optimizer = Adam(learning_rate=0.0001, clipvalue=1.0)  # Clip gradients at 1.0
     model.compile(optimizer=optimizer, loss='mean_squared_error', metrics=['mae'])
-
 
     return model
 
