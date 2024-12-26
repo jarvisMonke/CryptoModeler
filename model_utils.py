@@ -529,6 +529,8 @@ class pipeline:
                 if any(np.isnan(value) for value in logs.values()):
                     print(f"NaN detected in batch {batch}")
                     self.model.stop_training = True
+                    logging.debug(f"Model has NaNs. dropout: {self.dropout}")
+
         nan_checker = NaNChecker()
 
         history = model.fit(self.X_train, self.y_train, epochs=epochs, batch_size=batch_size, 
