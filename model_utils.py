@@ -5,20 +5,18 @@ import talib
 import os
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler
 import numpy as np
-from sklearn.model_selection import train_test_split
 from tensorflow.keras.callbacks import EarlyStopping
 from tensorflow.keras.models import load_model
 import tensorflow as tf
 from sklearn.model_selection import train_test_split
-import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
 from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.optimizers import RMSprop
 from tensorflow.keras.initializers import HeNormal
-import optuna
-import numpy as np
+from optuna.integration import KerasPruningCallback  # Import Optuna KerasPruningCallback
 import logging
-import math
+
 
 logging.basicConfig(
     level=logging.DEBUG,  # Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
@@ -435,21 +433,24 @@ def feature_cut(feature_df, indicator_count):
 
   # Load Dataset based on timeframe
     
+
 class pipeline:
     def __init__(self):
         self.data = None
         self.class_name = self.__class__.__name__
         self.model = None
 
-    def pass_hyperparams(self, timeframe, num_indicators, scaler_type, window_size, look_ahead_size, dropout_rate, prediction_tolerance_max, prediction_tolerance_min, trade_threshold):
+    def pass_hyperparams(self, timeframe, num_indicators, scaler_type, window_size, look_ahead_size, params_grid, prediction_tolerance_max, prediction_tolerance_min, trade_threshold, sample_size):
         
-        self.hyperparams = timeframe, num_indicators, scaler_type, window_size, look_ahead_size, dropout_rate, prediction_tolerance_max, prediction_tolerance_min, trade_threshold
+        self.hyperparams = timeframe, num_indicators, scaler_type, window_size, look_ahead_size, params_grid, prediction_tolerance_max, prediction_tolerance_min, trade_threshold
+        
         self.timeframe = timeframe
         self.num_indicators = num_indicators # Number of technical indicators to include
         self.scaler_type = scaler_type # the type of normalizing scaler to use
         self.window_size = window_size # the window size of the inputs
         self.look_ahead_size = look_ahead_size # the size of the look ahead period
-        self.dropout_rate = dropout_rate # dropout rate in the lstm
+        self.params_grid = params_grid # dropout rate in the lstm
+        self.sample_size = sample_size
         # For use in the stratagy simulator
         self.prediction_tolerance_max = prediction_tolerance_max 
         self.prediction_tolerance_min = prediction_tolerance_min
@@ -481,7 +482,7 @@ class pipeline:
 
     # Creates features and cuts features
     def preprocess(self): 
-        model_data = self.data
+        model_data = self.data.head(self.sample_size)
 
         # Create features to num_indicators
         model_data = feature_cut(create_features(model_data), self.num_indicators)
@@ -512,52 +513,46 @@ class pipeline:
         self.y_test = scaler_y.fit_transform(self.y_test)  # Fit and normalize
         print("Data Split!")
 
-
-    # Trains a model
-    def train(self, epochs=50, batch_size=32):
-
-            # Callback to check NaNs in logs during training
+    
+    def train(self, trial, epochs=50):
+        """
+        Train the model using the Optuna pruning callback, early stopping, and NaN checking.
+        """
+        # Callback to check NaNs in logs during training
         class NaNChecker(tf.keras.callbacks.Callback):
-            def __init__(self, dropout_rate):
-                super().__init__()
-                self.dropout_rate = dropout_rate
-
             def on_batch_end(self, batch, logs=None):
                 if logs is not None and any(np.isnan(value) for value in logs.values()):
                     print(f"NaN detected in batch {batch}")
                     self.model.stop_training = True
-                    logging.debug(f"Model has NaNs. Dropout rate: {self.dropout_rate}")
-            
-             # Learning rate monitor
-        class LearningRateMonitor(tf.keras.callbacks.Callback):
-            def on_epoch_end(self, epoch, logs=None):
-                lr = self.model.optimizer.learning_rate.numpy()
-                print(f" - learning Rate: {lr}")
         
-        lr_monitor = LearningRateMonitor()
-
-        # Early stopping
+        # Early stopping to prevent overfitting
         early_stopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
 
-        # Initialize NaNChecker with the dropout rate
-        nan_checker = NaNChecker(dropout_rate=self.dropout_rate)
+        # Initialize NaNChecker
+        nan_checker = NaNChecker()
 
         # Create and compile the model
         height, length, width = self.X_train.shape
-        model = create_model(input_shape=(length, width), dropout=self.dropout_rate)
+        model = create_model(input_shape=(length, width), params_grid=self.params_grid)
 
-        # Train the model
+        # Use Optuna's KerasPruningCallback to prune the trial if necessary
+        pruning_callback = KerasPruningCallback(trial, 'val_loss')  # Monitor 'val_loss' for pruning
+
+        # Train the model with callbacks
         history = model.fit(
             self.X_train, 
             self.y_train, 
             epochs=epochs, 
-            batch_size=batch_size, 
+            batch_size=self.params_grid["batch_size"],
             validation_split=0.1, 
             verbose=1, 
-            callbacks=[early_stopping, nan_checker, lr_monitor]
+            callbacks=[early_stopping, nan_checker, pruning_callback]
         )
+        
+        # Set the model to the trained one
         self.model = model
-    
+        return model
+
     # save a model
     def save_Model(self, version=0):
         self.model.save(f'models/{self.class_name}_v{version}.keras')
@@ -566,21 +561,20 @@ class pipeline:
     def load_Model(self, version=0):
         self.model = load_model(f'models/{self.class_name}_v{version}.keras')
 
-    # calculate the -% profitability
+    # calculate the % profitability
     def return_profit(self):
-            # get a negative profit %
+            # get a profit %
         return simulate_trading(self.model, self.prediction_tolerance_max, self.prediction_tolerance_min, self.X_test, self.unscaled_y_test, self.unscaled_y_train, self.trade_threshold)
     
     # runs a full training stack
-    def full_stack(self, filename):
+    def full_stack(self, trial, filename):
         self.load_file(filename=filename)
         self.preprocess()
         self.target_creation()
         self.split_data()
-        self.train()
+        self.train(trial=trial)
         total_profit, X_test, y_test, y_train, predictions = self.return_profit()
         return total_profit
-    
     
 
 def distribution(data, bins = 30):   
@@ -595,30 +589,28 @@ def distribution(data, bins = 30):
     plt.show()
 
 
-
-
-def create_model(input_shape, dropout):
+def create_model(input_shape, params_grid):
     model = Sequential()
 
-    # Specify the input shape using the Input() layer
+    # Input layer
     model.add(Input(shape=input_shape))
 
-    # LSTM layer
-    model.add(LSTM(128, activation='relu', kernel_initializer=HeNormal(), return_sequences=True))
+    # LSTM layers with dynamic units and dropout
+    model.add(LSTM(params_grid["lstm_units_1"], activation=params_grid["activation"], kernel_initializer=HeNormal(), return_sequences=True))
+    model.add(Dropout(params_grid["dropout"]))
+    model.add(LSTM(params_grid["lstm_units_2"], activation=params_grid["activation"], kernel_initializer=HeNormal(), return_sequences=False))
+    model.add(Dropout(params_grid["dropout"]))
 
-    #model.add(LSTM(128, activation='relu', input_shape=input_shape, return_sequences=True))
-    model.add(Dropout(dropout))
-
-    model.add(LSTM(64, activation='relu', kernel_initializer=HeNormal(), return_sequences=False))
-
-    #model.add(LSTM(64, activation='relu', return_sequences=False))
-    model.add(Dropout(dropout))
-
-    # Dense layer for output
-    model.add(Dense(32, activation='relu'))
+    # Dense layers
+    model.add(Dense(params_grid["dense_units"], activation=params_grid["activation"]))
     model.add(Dense(2))  # Output layer: 2 values for predicted min and max percentage change
 
-    optimizer = Adam(learning_rate=0.0001, clipvalue=1.0)  # Clip gradients at 1.0
+    # Optimizer selection
+    if params_grid["optimizer"] == 'adam':
+        optimizer = Adam(learning_rate=params_grid["learning_rate"], clipvalue=params_grid["gradient_clipping"])
+    else:
+        optimizer = RMSprop(learning_rate=params_grid["learning_rate"], clipvalue=params_grid["gradient_clipping"])
+
     model.compile(optimizer=optimizer, loss='mean_squared_error', metrics=['mae'])
 
     return model
@@ -664,17 +656,15 @@ trade_threshold):
             stop_loss = predictions_rescaled[frame][1] * prediction_tolerance_min
             tot_stop_loss.append(stop_loss)
 
-            # If the trade was profitable return the profit
-            if take_profit >= y_test[frame][0]:
-                profit = y_test[frame][0]
-                wins += 1
-            # Unprofitable trades return the stoploss
-            else:
-                # Can have a >1 stop loss
-                profit = stop_loss - int(stop_loss)
-                loses += 1
+            if y_test[frame][0] >= take_profit:  # Profit target reached
+                profit = take_profit
+            elif y_test[frame][1] <= stop_loss:  # Stop loss triggered
+                profit = stop_loss
+            else:  # Trade held till the end of the frame
+                profit = 0  # Actual outcome
+
             # taker fee + maker fee
-            fee = .006 + .004*(1+profit)
+            fee = .006 + (.004*(1+profit))
             total_profit = total_profit + profit - fee
         else:
             tot_take_profit.append(0)
@@ -686,4 +676,4 @@ trade_threshold):
 
     # Return negative profit as something to minamize
     print(f'Tot Profit: {total_profit}, Wins: {wins}, Loses: {loses}, No-trade: {none}')
-    return -total_profit, X_test, y_test, y_train, predictions_rescaled
+    return total_profit, X_test, y_test, y_train, predictions_rescaled
