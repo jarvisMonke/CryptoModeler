@@ -15,14 +15,6 @@ from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.optimizers import RMSprop
 from tensorflow.keras.initializers import HeNormal
 from optuna.integration import KerasPruningCallback  # Import Optuna KerasPruningCallback
-import logging
-
-
-logging.basicConfig(
-    level=logging.DEBUG,  # Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-    format='%(asctime)s - %(levelname)s - %(message)s',  # Log message format
-  
-)
 
 
 # Fetch the data
@@ -233,7 +225,7 @@ def create_targets(df, window_size, look_ahead):
         y_targets.append([target_max, target_min])
 
         if np.isnan(X_window).any():  # detects NaN
-            logging.warning(f'NaN in X: {X_window}')
+            print('NaN in X: {X_window}')
 
     # Convert lists to numpy arrays for modeling
     X = np.array(X_windows)  # Shape: (num_windows, window_size, num_features)
@@ -260,36 +252,10 @@ def profitable_percent(y, percent):
 # CREATE FEATURES
 
 def create_features(dataframe):
-    """
-    Calculate a wide range of technical indicators using TA-Lib and return them as a dictionary.
-    
-    Parameters:
-    dataframe (pd.DataFrame): A DataFrame with 'open', 'high', 'low', 'close', and 'volume' columns.
-    
-    Returns:
-    dict: A dictionary with indicator names as keys and calculated values as values.
-    """
+  
     indicators = {}
 
-
-    # Price-based Indicators
-    # indicators['BBANDS_upper'], indicators['BBANDS_middle'], indicators['BBANDS_lower'] = talib.BBANDS(dataframe['close'])
-    # indicators['DEMA'] = talib.DEMA(dataframe['close'])
-    # indicators['EMA'] = talib.EMA(dataframe['close'])
-    # indicators['HT_TRENDLINE'] = talib.HT_TRENDLINE(dataframe['close'])
-    # indicators['KAMA'] = talib.KAMA(dataframe['close'])
-    # indicators['MA'] = talib.MA(dataframe['close'])
-    # indicators['MAMA_1'], indicators['MAMA_2'] = talib.MAMA(dataframe['close'])
-    # indicators['MIDPOINT'] = talib.MIDPOINT(dataframe['close'])
-    # indicators['MIDPRICE'] = talib.MIDPRICE(dataframe['high'], dataframe['low'])
-    # indicators['SAR'] = talib.SAR(dataframe['high'], dataframe['low'])
     indicators['SAREXT'] = talib.SAREXT(dataframe['high'], dataframe['low'])
-    # indicators['SMA'] = talib.SMA(dataframe['close'])
-    # indicators['T3'] = talib.T3(dataframe['close'])
-    # indicators['TEMA'] = talib.TEMA(dataframe['close'])
-    # indicators['TRIMA'] = talib.TRIMA(dataframe['close'])
-    # indicators['WMA'] = talib.WMA(dataframe['close'])
-    
     # Momentum Indicators
     indicators['ADX'] = talib.ADX(dataframe['high'], dataframe['low'], dataframe['close'])
     indicators['ADXR'] = talib.ADXR(dataframe['high'], dataframe['low'], dataframe['close'])
@@ -329,19 +295,21 @@ def create_features(dataframe):
     indicators['HT_DCPHASE'] = talib.HT_DCPHASE(dataframe['close'])
     indicators['HT_TRENDMODE'] = talib.HT_TRENDMODE(dataframe['close'])
     
-    # Price Transform
-    # indicators['AVGPRICE'] = talib.AVGPRICE(dataframe['open'], dataframe['high'], dataframe['low'], dataframe['close'])
-    # indicators['MEDPRICE'] = talib.MEDPRICE(dataframe['high'], dataframe['low'])
-    # indicators['TYPPRICE'] = talib.TYPPRICE(dataframe['high'], dataframe['low'], dataframe['close'])
-    # indicators['WCLPRICE'] = talib.WCLPRICE(dataframe['high'], dataframe['low'], dataframe['close'])
-    
     # Volatility Indicators
     indicators['ATR'] = talib.ATR(dataframe['high'], dataframe['low'], dataframe['close'])
     indicators['NATR'] = talib.NATR(dataframe['high'], dataframe['low'], dataframe['close'])
     indicators['TRANGE'] = talib.TRANGE(dataframe['high'], dataframe['low'], dataframe['close'])
     
     # Time Indicators 
+
+    # Convert the timestamp column to datetime 
+   
+    #dataframe.loc[:, 'timestamp'] = pd.to_datetime(dataframe['timestamp'], errors='coerce')
+
+    
     dataframe['timestamp'] = pd.to_datetime(dataframe['timestamp'], errors='coerce')
+    
+
     indicators['day'] = dataframe['timestamp'].dt.day
     indicators['hour'] = dataframe['timestamp'].dt.hour
     indicators['minute'] = dataframe['timestamp'].dt.minute
@@ -365,7 +333,6 @@ def create_features(dataframe):
 
     #indicators_df = pd.DataFrame(indicators, index=dataframe.index)
     return indicators_df
-
 
 
 # CUT FEATURES based on the list
@@ -425,14 +392,55 @@ def feature_cut(feature_df, indicator_count):
     # Select the top-ranked rows
     top_ranked_indices = sorted_feature_names[:indicator_count]
 
-    # Filter the tensor based on the top-ranked indices
-    filtered_df = feature_df[top_ranked_indices]
-    filtered_df['close'] = feature_df['close']  # Add the target column back if needed
+    # Filter the tensor based on the top-ranked indices and ensure a copy is made
+    filtered_df = feature_df[top_ranked_indices].copy()
+
+    # Add the target column back, now that filtered_df is a separate object
+    filtered_df.loc[:, 'close'] = feature_df['close']
+
     return filtered_df 
 
 
   # Load Dataset based on timeframe
     
+def split_train_val_test(X, y, train_size, val_size, test_size):
+    
+    num_windows = len(X)
+    
+    # Calculate the split indices
+    train_end = int(num_windows * train_size)
+    val_end = train_end + int(num_windows * val_size)
+    
+    # Split the windows
+    X_train = X[:train_end]
+    X_val = X[train_end:val_end]
+    X_test = X[val_end:]
+
+    y_train = y[:train_end]
+    y_val = y[train_end:val_end]
+    y_test = y[val_end:]
+    
+    # Shuffle the data
+    # Set the random seed for reproducibility
+    np.random.seed(42)
+
+    # Generate a random permutation of indices
+    train_indices = np.random.permutation(len(X_train))
+    val_indices = np.random.permutation(len(X_val))
+    test_indices = np.random.permutation(len(X_test))
+
+    # Set the data to the indices
+    X_train = X_train[train_indices]
+    y_train = y_train[train_indices]
+
+    X_val = X_val[val_indices]
+    y_val = y_val[val_indices]
+
+    X_test = X_test[test_indices]
+    y_test = y_test[test_indices]
+
+    return X_train, y_train, X_val, y_val, X_test, y_test
+
 
 class pipeline:
     def __init__(self):
@@ -482,7 +490,7 @@ class pipeline:
 
     # Creates features and cuts features
     def preprocess(self): 
-        model_data = self.data.head(self.sample_size)
+        model_data = self.data.tail(self.sample_size)
 
         # Create features to num_indicators
         model_data = feature_cut(create_features(model_data), self.num_indicators)
@@ -502,16 +510,20 @@ class pipeline:
     def split_data(self):
 
         # We want to shuffle the data to prevent the model from learning any unintended patterns from the order of the sequences
-        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(self.X, self.y, test_size=0.2, random_state=42, shuffle=True)
+
+        self.X_train, self.y_train, self.X_val, self.y_val, self.X_test, self.y_test = split_train_val_test(self.X, self.y, train_size=0.7, val_size=0.15, test_size=0.15)
 
         # Scale the y_data
         scaler_y = MinMaxScaler(feature_range=(-1, 1))
         self.unscaled_y_train = self.y_train # create a data set to inverse the scale
         self.unscaled_y_test = self.y_test # create a data set to inverse the scale
+        self.unscaled_y_val = self.y_val # create a data set to inverse the scale
 
         self.y_train = scaler_y.fit_transform(self.y_train)  # Fit and normalize
         self.y_test = scaler_y.fit_transform(self.y_test)  # Fit and normalize
-        print("Data Split!")
+        self.y_val = scaler_y.fit_transform(self.y_val)  # Fit and normalize
+
+        print("Data Split, Shuffled, and y normalized!")
 
     
     def train(self, trial, epochs=50):
@@ -538,16 +550,16 @@ class pipeline:
         # Use Optuna's KerasPruningCallback to prune the trial if necessary
         pruning_callback = KerasPruningCallback(trial, 'val_loss')  # Monitor 'val_loss' for pruning
 
-        # Train the model with callbacks
+            # Train the model with callbacks and explicit validation data
         history = model.fit(
             self.X_train, 
             self.y_train, 
             epochs=epochs, 
             batch_size=self.params_grid["batch_size"],
-            validation_split=0.1, 
+            validation_data=(self.X_val, self.y_val),  # Explicitly providing validation data
             verbose=1, 
-            callbacks=[early_stopping, nan_checker, pruning_callback]
-        )
+            callbacks=[early_stopping, nan_checker, pruning_callback]   
+            )
         
         # Set the model to the trained one
         self.model = model
@@ -576,18 +588,6 @@ class pipeline:
         total_profit, X_test, y_test, y_train, predictions = self.return_profit()
         return total_profit
     
-
-def distribution(data, bins = 30):   
-    import seaborn as sns
-    import matplotlib.pyplot as plt
-
-    # Plot distribution with KDE
-    sns.histplot(data, kde=True, bins=bins, color='blue')
-    plt.title('Distribution with KDE')
-    plt.xlabel('Value')
-    plt.ylabel('Density')
-    plt.show()
-
 
 def create_model(input_shape, params_grid):
     model = Sequential()
@@ -635,6 +635,7 @@ trade_threshold):
 
     wins = 0
     loses = 0
+    no_hit = 0
     none = 0
 
     total_profit = 0
@@ -658,10 +659,18 @@ trade_threshold):
 
             if y_test[frame][0] >= take_profit:  # Profit target reached
                 profit = take_profit
+                wins += 1
             elif y_test[frame][1] <= stop_loss:  # Stop loss triggered
                 profit = stop_loss
+                loses += 1
+
+                # Penalize Postive Stop Losses on bad models
+                if stop_loss > 0:
+                    profit *= -1
+                    
             else:  # Trade held till the end of the frame
                 profit = 0  # Actual outcome
+                no_hit += 1
 
             # taker fee + maker fee
             fee = .006 + (.004*(1+profit))
@@ -675,5 +684,16 @@ trade_threshold):
     print(f'SL:{tot_stop_loss[:10]}')
 
     # Return negative profit as something to minamize
-    print(f'Tot Profit: {total_profit}, Wins: {wins}, Loses: {loses}, No-trade: {none}')
+    print(f'Tot Profit: {total_profit}, Wins: {wins}, Loses: {loses}, No-Hits: {no_hit} No-trade: {none}')
     return total_profit, X_test, y_test, y_train, predictions_rescaled
+
+def distribution(data, bins = 30):   
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+
+    # Plot distribution with KDE
+    sns.histplot(data, kde=True, bins=bins, color='blue')
+    plt.title('Distribution with KDE')
+    plt.xlabel('Value')
+    plt.ylabel('Density')
+    plt.show()
