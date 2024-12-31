@@ -234,7 +234,6 @@ def create_targets(df, window_size, look_ahead):
     return(X,y)
 
 
-
 # Calculate the number of windows with a max percent above n
 def profitable_percent(y, percent):
     count = 0
@@ -301,18 +300,12 @@ def create_features(dataframe):
     indicators['TRANGE'] = talib.TRANGE(dataframe['high'], dataframe['low'], dataframe['close'])
     
     # Time Indicators 
-
     # Convert the timestamp column to datetime 
-   
-    #dataframe.loc[:, 'timestamp'] = pd.to_datetime(dataframe['timestamp'], errors='coerce')
-
+    timeframes = pd.to_datetime(dataframe['timestamp'], errors='coerce')
     
-    dataframe['timestamp'] = pd.to_datetime(dataframe['timestamp'], errors='coerce')
-    
-
-    indicators['day'] = dataframe['timestamp'].dt.day
-    indicators['hour'] = dataframe['timestamp'].dt.hour
-    indicators['minute'] = dataframe['timestamp'].dt.minute
+    indicators['day'] = timeframes.dt.day
+    indicators['hour'] = timeframes.dt.hour
+    indicators['minute'] = timeframes.dt.minute
 
     # Create a new DataFrame from the dictionary
     new_cols = pd.DataFrame(indicators)
@@ -532,16 +525,21 @@ class pipeline:
         """
         # Callback to check NaNs in logs during training
         class NaNChecker(tf.keras.callbacks.Callback):
+            def __init__(self, trial):
+                super().__init__()
+                self.trial = trial
+
             def on_batch_end(self, batch, logs=None):
                 if logs is not None and any(np.isnan(value) for value in logs.values()):
-                    print(f"NaN detected in batch {batch}")
+                    print(f"NaN detected in batch {batch}, pruning trial.")
+                    self.trial.report(float("nan"), step=batch)
                     self.model.stop_training = True
         
+        # Initialize NaNChecker
+        nan_checker = NaNChecker(trial)
+
         # Early stopping to prevent overfitting
         early_stopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
-
-        # Initialize NaNChecker
-        nan_checker = NaNChecker()
 
         # Create and compile the model
         height, length, width = self.X_train.shape
@@ -585,8 +583,8 @@ class pipeline:
         self.target_creation()
         self.split_data()
         self.train(trial=trial)
-        total_profit, X_test, y_test, y_train, predictions = self.return_profit()
-        return total_profit
+        total_profit, total_trades, X_test, y_test, y_train, predictions = self.return_profit()
+        return total_profit, total_trades
     
 
 def create_model(input_shape, params_grid):
@@ -637,6 +635,7 @@ trade_threshold):
     loses = 0
     no_hit = 0
     none = 0
+    total_trades = 0
 
     total_profit = 0
     tot_take_profit = []
@@ -648,7 +647,7 @@ trade_threshold):
     for frame in range(len(predictions_rescaled)):
         # If the trade_threshold is reached place a trade 
         if predictions_rescaled[frame][0] >= trade_threshold:
-            
+            total_trades += 1
             # Calculate the take profits
             take_profit = predictions_rescaled[frame][0] * prediction_tolerance_max
             tot_take_profit.append(take_profit)
@@ -685,7 +684,7 @@ trade_threshold):
 
     # Return negative profit as something to minamize
     print(f'Tot Profit: {total_profit}, Wins: {wins}, Loses: {loses}, No-Hits: {no_hit} No-trade: {none}')
-    return total_profit, X_test, y_test, y_train, predictions_rescaled
+    return total_profit, total_trades, X_test, y_test, y_train, predictions_rescaled
 
 def distribution(data, bins = 30):   
     import seaborn as sns
