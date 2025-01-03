@@ -192,8 +192,7 @@ def normalize_data(df, scaler_name):
 
 
 # TARGET CREATION
-
-def create_targets(df, window_size, look_ahead):
+def create_targets(df, window_size, look_ahead, shift=1):
     # Columns to use as features
     feature_columns = df.columns.drop('close')  # exclude 'close' if it's the target
 
@@ -202,7 +201,7 @@ def create_targets(df, window_size, look_ahead):
     y_targets = []
 
     # Loop to create windows and look-ahead targets
-    for i in range(len(df) - window_size - look_ahead):
+    for i in range(0, len(df) - window_size - look_ahead, shift):
         # Create the input window of size `window_size`
         X_window = df.iloc[i : i + window_size][feature_columns].values
         
@@ -231,7 +230,7 @@ def create_targets(df, window_size, look_ahead):
     X = np.array(X_windows)  # Shape: (num_windows, window_size, num_features)
     y = np.array(y_targets)  # Shape: (num_windows, 2) for max, min
     
-    return(X,y)
+    return X, y
 
 
 # Calculate the number of windows with a max percent above n
@@ -441,7 +440,7 @@ class pipeline:
         self.class_name = self.__class__.__name__
         self.model = None
 
-    def pass_hyperparams(self, timeframe, num_indicators, scaler_type, window_size, look_ahead_size, params_grid, prediction_tolerance_max, prediction_tolerance_min, trade_threshold, sample_size):
+    def pass_hyperparams(self, timeframe, num_indicators, scaler_type, window_size, look_ahead_size, params_grid, prediction_tolerance_max=1, prediction_tolerance_min=1, trade_threshold=.01):
         
         self.hyperparams = timeframe, num_indicators, scaler_type, window_size, look_ahead_size, params_grid, prediction_tolerance_max, prediction_tolerance_min, trade_threshold
         
@@ -451,7 +450,6 @@ class pipeline:
         self.window_size = window_size # the window size of the inputs
         self.look_ahead_size = look_ahead_size # the size of the look ahead period
         self.params_grid = params_grid # dropout rate in the lstm
-        self.sample_size = sample_size
         # For use in the stratagy simulator
         self.prediction_tolerance_max = prediction_tolerance_max 
         self.prediction_tolerance_min = prediction_tolerance_min
@@ -483,7 +481,7 @@ class pipeline:
 
     # Creates features and cuts features
     def preprocess(self): 
-        model_data = self.data.tail(self.sample_size)
+        model_data = self.data
 
         # Create features to num_indicators
         model_data = feature_cut(create_features(model_data), self.num_indicators)
@@ -497,27 +495,26 @@ class pipeline:
     # Creates targets 
     def target_creation(self):
          # Create Targets based on window_size and look_ahead_size
-        self.X, self.y  = create_targets(self.data, self.window_size, self.look_ahead_size)
+        self.X, self.y  = create_targets(self.data, self.window_size, self.look_ahead_size, shift=20)
     
     # Splits and shuffle data
     def split_data(self):
 
-        # We want to shuffle the data to prevent the model from learning any unintended patterns from the order of the sequences
+        split_index = int(len(self.X) * 0.9)
+        self.X_model, self.X_test = self.X[:split_index], self.X[split_index:]
+        self.y_model, self.y_test = self.y[:split_index], self.y[split_index:]
 
-        self.X_train, self.y_train, self.X_val, self.y_val, self.X_test, self.y_test = split_train_val_test(self.X, self.y, train_size=0.7, val_size=0.15, test_size=0.15)
-
-        # Scale the y_data
+        print("Data Split into model and test Sets")
+    
+    def normalize_y_data(self):
+         # Scale the y_data
         scaler_y = MinMaxScaler(feature_range=(-1, 1))
-        self.unscaled_y_train = self.y_train # create a data set to inverse the scale
+        
+        self.unscaled_y_train = self.y_model # create a data set to inverse the scale
         self.unscaled_y_test = self.y_test # create a data set to inverse the scale
-        self.unscaled_y_val = self.y_val # create a data set to inverse the scale
 
-        self.y_train = scaler_y.fit_transform(self.y_train)  # Fit and normalize
+        self.y_model = scaler_y.fit_transform(self.y_model)  # Fit and normalize
         self.y_test = scaler_y.fit_transform(self.y_test)  # Fit and normalize
-        self.y_val = scaler_y.fit_transform(self.y_val)  # Fit and normalize
-
-        print("Data Split, Shuffled, and y normalized!")
-
     
     def train(self, trial, epochs=50):
         """
@@ -542,26 +539,51 @@ class pipeline:
         early_stopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
 
         # Create and compile the model
-        height, length, width = self.X_train.shape
+        height, length, width = self.X_model.shape
         model = create_model(input_shape=(length, width), params_grid=self.params_grid)
 
         # Use Optuna's KerasPruningCallback to prune the trial if necessary
         pruning_callback = KerasPruningCallback(trial, 'val_loss')  # Monitor 'val_loss' for pruning
 
-            # Train the model with callbacks and explicit validation data
-        history = model.fit(
-            self.X_train, 
-            self.y_train, 
-            epochs=epochs, 
-            batch_size=self.params_grid["batch_size"],
-            validation_data=(self.X_val, self.y_val),  # Explicitly providing validation data
-            verbose=1, 
-            callbacks=[early_stopping, nan_checker, pruning_callback]   
-            )
         
-        # Set the model to the trained one
+        # Parameters for rolling window
+        train_size = 3000  # Initial training size
+        val_size = 500     # Validation size
+        step_size = 200    # How much to move the window for each epoch
+
+        # Loop through epochs and update train and validation data
+        for epoch in range(epochs):
+            # For each epoch, update the training and validation data using the rolling window
+            train_start = epoch * step_size
+            train_end = train_start + train_size
+            
+            val_start = train_end
+            val_end = val_start + val_size
+            
+            # Make sure we don't go out of bounds for the last epoch
+            if val_end > len(self.X_model):
+                break
+            
+              # Get the new training and validation data slices for the current epoch
+            X_train_epoch = self.X_model[train_start:train_end]
+            y_train_epoch = self.y_model[train_start:train_end]
+            X_val_epoch = self.X_model[val_start:val_end]
+            y_val_epoch = self.y_model[val_start:val_end]
+            
+            # Now train the same model on the new data for this epoch (do not reinitialize model)
+            history = model.fit(
+                X_train_epoch, 
+                y_train_epoch, 
+                epochs=1,  # Train for 1 epoch at a time in this loop
+                batch_size=self.params_grid["batch_size"],
+                validation_data=(X_val_epoch, y_val_epoch),  # Provide the new validation data
+                verbose=1, 
+                callbacks=[early_stopping, nan_checker, pruning_callback]   
+            )
+
         self.model = model
         return model
+
 
     # save a model
     def save_Model(self, version=0):
@@ -582,9 +604,10 @@ class pipeline:
         self.preprocess()
         self.target_creation()
         self.split_data()
-        self.train(trial=trial)
-        total_profit, total_trades, X_test, y_test, y_train, predictions = self.return_profit()
-        return total_profit, total_trades
+        self.normalize_y_data()
+        #total_profit, total_trades, X_test, y_test, y_train, predictions = self.return_profit()
+        return self.train(trial=trial)
+
     
 
 def create_model(input_shape, params_grid):
