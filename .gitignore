@@ -1,3 +1,6 @@
 .venv/
+.vscode/
+logs/
+config/config.ini
 __pycache__/
 *.pyc

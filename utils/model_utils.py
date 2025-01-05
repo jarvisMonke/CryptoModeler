@@ -3,27 +3,37 @@ import pandas as pd
 import time
 import talib
 import os
-from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler
 import numpy as np
+import tensorflow as tf
+import optuna
+import matplotlib.pyplot as plt
+import seaborn as sns
+import configparser
+
+from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler
+from sklearn.model_selection import train_test_split
+
 from tensorflow.keras.callbacks import EarlyStopping
 from tensorflow.keras.models import load_model
-import tensorflow as tf
-from sklearn.model_selection import train_test_split
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.optimizers import RMSprop
 from tensorflow.keras.initializers import HeNormal
-from optuna.integration import KerasPruningCallback  # Import Optuna KerasPruningCallback
 
+from optuna.integration import KerasPruningCallback  
+from optuna.exceptions import TrialPruned
+
+config = configparser.ConfigParser()
+config.read('config.ini')
 
 # Fetch the data
 def fetch_data(symbol, timeframe, start_date, end_date):
     
     exchange = ccxt.binanceus({
-    'apiKey': 'ixiC5PZRFVXigpz97RZOju0ttiZyEBDr4gDwpALTMnF2DjgdSvtg6GrioqXOasSV',
-    'secret': 'uqrpOre77kKdMpyyMmoZL8mgaGBTT8vpb5UAk53Fvcf1nkCkxSelyek0sGD2yC2q',
-})
+        'apiKey': config['BINANCEUS']['API_KEY'],
+        'secret': config['BINANCEUS']['SECRET']
+    })
     limit = 500
     start_timestamp = int(pd.Timestamp(start_date).timestamp() * 1000)
     end_timestamp = int(pd.Timestamp(end_date).timestamp() * 1000)
@@ -163,7 +173,6 @@ def check_for_missing_data(df):
 
 # DATA NORMILIZATION
 
-# Assuming you have a CSV file with columns: timestamp, open, high, low, close, volume, SMA_20, EMA_20, RSI_14, MACD, MACD_signal, MACD_hist, BB_upper, BB_middle, BB_lower, ADX_14
 
 # Initialize the chosen scaler
 scalers = {
@@ -440,7 +449,7 @@ class pipeline:
         self.class_name = self.__class__.__name__
         self.model = None
 
-    def pass_hyperparams(self, timeframe, num_indicators, scaler_type, window_size, look_ahead_size, params_grid, prediction_tolerance_max=1, prediction_tolerance_min=1, trade_threshold=.01):
+    def pass_hyperparams(self, timeframe, num_indicators, scaler_type, window_size, look_ahead_size, params_grid, tuning=True, prediction_tolerance_max=1, prediction_tolerance_min=1, trade_threshold=.01):
         
         self.hyperparams = timeframe, num_indicators, scaler_type, window_size, look_ahead_size, params_grid, prediction_tolerance_max, prediction_tolerance_min, trade_threshold
         
@@ -454,6 +463,7 @@ class pipeline:
         self.prediction_tolerance_max = prediction_tolerance_max 
         self.prediction_tolerance_min = prediction_tolerance_min
         self.trade_threshold = trade_threshold
+        self.tuning = tuning
 
     # Loads a file based on a filename into .data
     def load_file(self, datatype=None, filename=None):
@@ -528,9 +538,8 @@ class pipeline:
 
             def on_batch_end(self, batch, logs=None):
                 if logs is not None and any(np.isnan(value) for value in logs.values()):
-                    print(f"NaN detected in batch {batch}, pruning trial.")
-                    self.trial.report(float("nan"), step=batch)
-                    self.model.stop_training = True
+                    print("NaN detected, pruning trial.")
+                    raise optuna.exceptions.TrialPruned()
         
         # Initialize NaNChecker
         nan_checker = NaNChecker(trial)
@@ -542,15 +551,13 @@ class pipeline:
         height, length, width = self.X_model.shape
         model = create_model(input_shape=(length, width), params_grid=self.params_grid)
 
-        # Use Optuna's KerasPruningCallback to prune the trial if necessary
-        pruning_callback = KerasPruningCallback(trial, 'val_loss')  # Monitor 'val_loss' for pruning
-
         
         # Parameters for rolling window
         train_size = 3000  # Initial training size
         val_size = 500     # Validation size
         step_size = 200    # How much to move the window for each epoch
 
+        epoch_counter = 0  # Track total epochs across windows
         # Loop through epochs and update train and validation data
         for epoch in range(epochs):
             # For each epoch, update the training and validation data using the rolling window
@@ -570,6 +577,9 @@ class pipeline:
             X_val_epoch = self.X_model[val_start:val_end]
             y_val_epoch = self.y_model[val_start:val_end]
             
+            # Use Optuna's KerasPruningCallback to prune the trial if necessary
+            pruning_callback = KerasPruningCallback(trial, 'val_loss')  # Monitor 'val_loss' for pruning
+
             # Now train the same model on the new data for this epoch (do not reinitialize model)
             history = model.fit(
                 X_train_epoch, 
@@ -580,6 +590,19 @@ class pipeline:
                 verbose=1, 
                 callbacks=[early_stopping, nan_checker, pruning_callback]   
             )
+                       
+            if self.tuning:
+                # Manually increment the Optuna pruning step
+                trial.report(history.history['val_loss'][-1], step=epoch_counter)
+                if trial.should_prune():
+                    raise optuna.exceptions.TrialPruned()
+                epoch_counter += 1
+
+                # Stop if early stopping is triggered
+                if early_stopping.stopped_epoch > 0:
+                    print("Early stopping triggered.")
+                    break
+
 
         self.model = model
         return model
@@ -710,8 +733,6 @@ trade_threshold):
     return total_profit, total_trades, X_test, y_test, y_train, predictions_rescaled
 
 def distribution(data, bins = 30):   
-    import seaborn as sns
-    import matplotlib.pyplot as plt
 
     # Plot distribution with KDE
     sns.histplot(data, kde=True, bins=bins, color='blue')
