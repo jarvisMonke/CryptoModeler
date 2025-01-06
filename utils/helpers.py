@@ -55,6 +55,7 @@ Notes:
 import os
 import time
 import ccxt
+import numpy as np
 import configparser
 from pathlib import Path
 import pandas as pd
@@ -170,7 +171,7 @@ def load_data(file_path):
     FileNotFoundError: If the file does not exist at the specified path.
     """
     if not os.path.exists(file_path):
-        raise FileNotFoundError(f"No file found at {file_path}.")
+        raise FileNotFoundError(f"No file found at {file_path}")
     
     data = pd.read_csv(file_path)
     print(f"Dataset loaded from {file_path}.")
@@ -196,7 +197,7 @@ def save_data(data, file_path):
     
     # Save the data to the specified path
     data.to_csv(file_path, index=False)
-    print(f"Dataset saved to {file_path}.")
+    print(f"Dataset saved to {file_path}")
 
 def save_model(model, file_path):
     """
@@ -211,7 +212,7 @@ def save_model(model, file_path):
     IOError: If there is an issue saving the model to the specified file path.
     """
     model.save(file_path)
-    print(f"Model saved to {file_path}.")
+    print(f"Model saved to {file_path}")
 
 def load_model(file_path):
     """
@@ -227,8 +228,56 @@ def load_model(file_path):
     IOError: If there is an issue loading the model from the specified file path.
     """
     model = internal_load_model(file_path)
-    print(f"Model loaded from {file_path}.")
+    print(f"Model loaded from {file_path}")
     return model
+
+def check_for_missing_data(df):
+    """
+    Check for missing timestamps and data points in the DataFrame.
+
+    This function will:
+    1. Convert the 'timestamp' column to datetime format if it's not already.
+    2. Automatically detect the frequency of timestamps (e.g., 1 minute, hourly, etc.).
+    3. Check for missing timestamps based on the detected frequency.
+    4. Identify and print rows that contain missing data points (NaN values).
+
+    Parameters:
+    df (pd.DataFrame): The DataFrame to check, which should include a 'timestamp' column.
+
+    Returns:
+    None
+    """
+    # Ensure the timestamp column is in datetime format
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+    # Check the frequency of timestamps in the dataset by finding the most common difference between consecutive timestamps
+    time_diffs = df['timestamp'].diff().dropna()
+    most_common_diff = time_diffs.mode()[0]
+
+    # Calculate the expected frequency based on the most common time difference
+    expected_frequency = most_common_diff
+
+    # Generate the expected range of timestamps based on the start and end of the dataset
+    expected_timestamps = pd.date_range(start=df['timestamp'].min(), end=df['timestamp'].max(), freq=expected_frequency)
+
+    # Find missing timestamps
+    missing_timestamps = expected_timestamps.difference(df['timestamp'])
+
+    if not missing_timestamps.empty:
+        print("Missing timestamps:")
+        print(missing_timestamps)
+    else:
+        print("No missing timestamps.")
+
+    # Check for rows with missing data points (NaN values)
+    missing_data_rows = df[df.isna().any(axis=1)]
+
+    if not missing_data_rows.empty:
+        print("\nRows with missing data points:")
+        print(missing_data_rows)
+    else:
+        print("\nNo missing data points.")
+
 
 def distribution_plot(data, bins=30):
     """
@@ -247,3 +296,34 @@ def distribution_plot(data, bins=30):
     plt.xlabel('Value')
     plt.ylabel('Density')
     plt.show()
+
+def profit_simulation(y_test_pred, y_test, threshold=0.008):
+    total_profit = 0
+    for pred, actual in zip(y_test_pred, y_test):
+        pred_max, pred_min = pred
+        actual_max, actual_min = actual
+        
+        # Check if the predicted max is above the threshold to place a trade
+        if pred_max >= threshold:
+            # Calculate the profit based on actual max and min
+            if actual_max > threshold:
+                profit = actual_max
+            else:
+                profit = pred_min
+            total_profit += profit
+    
+    return total_profit
+
+def calculate_percentage_above_threshold(y_test, threshold=0.05):
+    """
+    Calculate the percentage of values in y_test that are above the given threshold.
+
+    Parameters:
+    y_test (numpy.ndarray): The array of test values.
+    threshold (float): The threshold value to compare against.
+
+    Returns:
+    float: The percentage of values above the threshold.
+    """
+    percentage_above_threshold = np.mean(y_test[:, 0] > threshold) * 100
+    return percentage_above_threshold

@@ -15,8 +15,9 @@ def create_indicators(dataframe, drop):
     Returns:
     pd.DataFrame: A DataFrame containing the calculated indicators.
     """
-    # Convert timestamps to datetime
-    timeframes = pd.to_datetime(dataframe['timestamp'], unit='ms')
+    # Convert 'timestamp' column to datetime
+    timeframes = pd.to_datetime(dataframe['timestamp'], errors='coerce')
+
     
     # Dictionary to store the indicators
     indicators = {}
@@ -150,34 +151,45 @@ def create_targets(df, window_size, look_ahead, shift=1):
     return X, y
 
 
-# Initialize the chosen scaler
+# Define the scalers
 scalers = {
     'MinMaxScaler': MinMaxScaler(),
     'StandardScaler': StandardScaler(),
     'RobustScaler': RobustScaler(),
 }
 
-
 def normalize_X(*datasets, scaler_name):
     """
-    Normalize an arbitrary number of datasets independently using the specified scaler.
+    Normalize an arbitrary number of datasets independently using the specified scaler, ignoring the 'close' column.
 
     Parameters:
-    *datasets: Arbitrary number of NumPy arrays representing datasets.
+    *datasets: Arbitrary number of pandas DataFrames representing datasets.
     scaler_name (str): The name of the scaler to use for normalization. Must be one of 'MinMaxScaler', 'StandardScaler', or 'RobustScaler'.
 
     Returns:
-    List of normalized datasets.
+    Separated normalized datasets as pandas DataFrames.
     """
     normalized_datasets = []
     scaler = scalers[scaler_name]
 
     for dataset in datasets:
-        # Fit and transform each dataset independently
-        normalized_data = scaler.fit_transform(dataset)
-        normalized_datasets.append(normalized_data)
+        # Check if the dataset is a DataFrame
+        if isinstance(dataset, pd.DataFrame):
+            # Separate the 'close' column
+            close_column = dataset['close']
+            features = dataset.drop(columns=['close'])
+            
+            # Normalize each column in the DataFrame except 'close'
+            normalized_features = pd.DataFrame(scaler.fit_transform(features), columns=features.columns, index=features.index)
+            
+            # Add the 'close' column back to the normalized DataFrame
+            normalized_data = pd.concat([normalized_features, close_column], axis=1)
+            normalized_datasets.append(normalized_data)
+        else:
+            raise ValueError("All datasets must be pandas DataFrames")
 
-    return normalized_datasets
+    return normalized_datasets[0] if len(normalized_datasets) == 1 else tuple(normalized_datasets)
+
 
 def normalize_y(*y_datasets, return_scaler=False):
     """
@@ -211,7 +223,6 @@ def normalize_y(*y_datasets, return_scaler=False):
 
     # Return the scaled datasets, and optionally the scaler if needed
     if return_scaler:
-        return tuple(scaled_y_datasets) + (scaler_y,)
-    else:
-        return tuple(scaled_y_datasets)
+        return (*scaled_y_datasets, scaler_y)
+    return scaled_y_datasets[0] if len(scaled_y_datasets) == 1 else tuple(scaled_y_datasets)
 
