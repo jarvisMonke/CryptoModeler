@@ -1,8 +1,56 @@
+"""
+This module contains a set of functions for preprocessing time series data related to financial markets.
+The functions are designed to prepare data for machine learning models used in financial prediction tasks,
+such as forecasting price movements and training models on historical OHLCV (Open, High, Low, Close, Volume) data.
+
+Functions:
+- `create_indicators`: 
+    Generates a specified number of technical indicators based on their importance from a given DataFrame containing OHLCV data. 
+    It uses the `TA-Lib` library to calculate various technical indicators like MFI, ADX, RSI, and MACD, among others, 
+    and returns a DataFrame containing the selected indicators.
+
+- `create_targets`: 
+    Creates input windows and corresponding target values for a trading model. 
+    Given a DataFrame with a 'close' column for target prices, it calculates the maximum and minimum price percentage changes 
+    over a specified look-ahead period, which will serve as the model's target values.
+
+- `normalize_X`: 
+    Normalizes one or more input datasets using a specified scaler ('MinMaxScaler', 'StandardScaler', or 'RobustScaler'). 
+    The 'close' column is excluded from normalization, and the normalized datasets are returned as pandas DataFrames.
+
+- `normalize_y`: 
+    Normalizes one or more target datasets using `MinMaxScaler` with a range of (-1, 1). 
+    The function can return the fitted scaler for later use when normalizing other datasets.
+
+Dependencies:
+- pandas: For handling DataFrames and time series data.
+- numpy: For handling numerical arrays.
+- scikit-learn: For normalization functions (MinMaxScaler, StandardScaler, RobustScaler).
+- TA-Lib: For calculating various technical indicators like MACD, ADX, RSI, and more.
+
+Usage:
+- `create_indicators` can be used to calculate a set of technical indicators that can be used as features for a trading model.
+- `create_targets` prepares target values for training the model to predict future price changes.
+- `normalize_X` and `normalize_y` are useful for scaling datasets before feeding them into machine learning models.
+
+Example:
+    # Create technical indicators for a DataFrame
+    indicators_df = create_indicators(df, drop=10)
+    
+    # Create input-output windows and target values
+    X, y = create_targets(indicators_df, window_size=50, look_ahead=10)
+    
+    # Normalize the input and target datasets
+    X_normalized = normalize_X(indicators_df, scaler_name='MinMaxScaler')
+    y_normalized = normalize_y(y, return_scaler=True)
+
+Note: Ensure that the `TA-Lib` library is installed and properly configured before using these functions, as it is required for technical indicator calculations.
+"""
+
 import numpy as np
 import pandas as pd
 import talib
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler
-
 
 def create_indicators(dataframe, drop):
     """
@@ -149,7 +197,6 @@ def create_targets(df, window_size, look_ahead, shift=1):
     y = np.array(y_targets)  # Shape: (num_windows, 2) for max, min
     
     return X, y
-
 
 # Define the scalers
 scalers = {

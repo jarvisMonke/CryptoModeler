@@ -278,26 +278,45 @@ def check_for_missing_data(df):
     else:
         print("\nNo missing data points.")
 
-
-def distribution_plot(data, bins=30):
+def distribution_plot(*data_sets, bins=30, colors=None):
     """
-    Plot the distribution of the data with a Kernel Density Estimate (KDE).
+    Plot the distribution of multiple datasets with Kernel Density Estimate (KDE) on the same plot.
 
     Parameters:
-    data (pd.Series or np.ndarray): The data to plot the distribution for.
+    *data_sets: Multiple datasets (pd.Series or np.ndarray) to plot the distributions for.
     bins (int): The number of bins to use for the histogram. Default is 30.
+    colors (list): List of colors to use for each dataset. If None, it will automatically assign colors.
 
     Returns:
     None
     """
-    # Plot distribution with KDE
-    sns.histplot(data, kde=True, bins=bins, color='blue')
-    plt.title('Distribution with KDE')
+    if colors is None:
+        colors = sns.color_palette("Set1", len(data_sets))  # Use a color palette
+
+    # Plot distribution with KDE for each dataset
+    for i, data in enumerate(data_sets):
+        sns.histplot(data, kde=True, bins=bins, color=colors[i], label=f'Data {i+1}')
+    
+    plt.title('Distributions with KDE')
     plt.xlabel('Value')
     plt.ylabel('Density')
+    plt.legend()
     plt.show()
 
 def profit_simulation(y_test_pred, y_test, threshold=0.008):
+    """
+    Simulates the profit based on predicted and actual values.
+    Parameters:
+        y_test_pred (list of tuples): A list of tuples where each tuple contains the predicted max and min values.
+        y_test (list of tuples): A list of tuples where each tuple contains the actual max and min values.
+        threshold (float, optional): The threshold value to determine if a trade should be placed. Defaults to 0.008.
+    Returns:
+        float: The total profit calculated based on the predictions and actual values.
+    Example:
+        y_test_pred = [(0.01, -0.005), (0.02, -0.01)]
+        y_test = [(0.015, -0.005), (0.025, -0.015)]
+        profit = profit_simulation(y_test_pred, y_test, threshold=0.01)
+    """
     total_profit = 0
     for pred, actual in zip(y_test_pred, y_test):
         pred_max, pred_min = pred
