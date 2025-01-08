@@ -1,0 +1,18 @@
+{
+    "epochs": 50,
+    "trials": 150,
+    "window_size": 80,
+    "look_ahead_size": 20,
+    "crypto": "ETHUSDT",
+    "timeframe": "1m",
+    "timeframe_filenames": {
+        "1m": "../data/raw/ETHUSDT_1m_v600k.csv",
+        "3m": "../data/raw/ETHUSDT_3m_v600k.csv",
+        "5m": "../data/DOGEUSDT_5m_v0.csv",
+        "15m": "../data/DOGEUSDT_15m_v0.csv",
+        "30m": "../data/DOGEUSDT_30m_v0.csv"
+    },
+    "train_size": 3000,
+    "val_size": 500,
+    "step_size": 200
+}

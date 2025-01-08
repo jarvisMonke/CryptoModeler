@@ -5,15 +5,18 @@ This module provides utility functions to:
 1. Fetch historical OHLCV (Open, High, Low, Close, Volume) data from Binance US using the CCXT library.
 2. Load and save datasets (CSV files) to/from local storage.
 3. Save and load machine learning models using Keras.
-4. Plot distribution of data with a Kernel Density Estimate (KDE) using Seaborn and Matplotlib.
+4. Save and load model parameters and associated data like scalers and test data.
+5. Plot distribution of data with a Kernel Density Estimate (KDE) using Seaborn and Matplotlib.
+6. Check for missing data points and timestamps in a dataset.
 
 Functions:
     - fetch_data(symbol, timeframe, start_date, end_date): Fetch historical OHLCV data from Binance US.
     - load_data(file_path): Load a CSV file into a pandas DataFrame.
     - save_data(data, file_path): Save a pandas DataFrame to a CSV file.
-    - save_model(model, file_path): Save a machine learning model to a specified file path.
-    - load_model(file_path): Load a machine learning model from a specified file path.
+    - save_model(model, params, model_name): Save a machine learning model and its parameters.
+    - load_model(model_name): Load a machine learning model, parameters, scalers, and test data.
     - distribution_plot(data, bins=30): Plot the distribution of a given dataset with a KDE.
+    - check_for_missing_data(df): Check for missing timestamps or data points in a DataFrame.
 
 Dependencies:
     - ccxt: For interacting with the Binance US exchange API.
@@ -22,9 +25,10 @@ Dependencies:
     - seaborn: For statistical data visualization.
     - matplotlib: For plotting the graphs.
     - tensorflow.keras: For saving and loading machine learning models.
+    - joblib: For saving and loading scaler objects and datasets.
 
 Configuration:
-    - The module requires a config.ini file containing API credentials for Binance US. The config file should have the following sections:
+    - The module requires a `config.ini` file containing API credentials for Binance US. The config file should have the following sections:
         [BINANCEUS]
         API_KEY = your_api_key
         SECRET = your_secret_key
@@ -40,21 +44,28 @@ Example Usage:
     >>> save_data(data, 'new_data.csv')
     
     3. Saving and loading models:
-    >>> save_model(model, 'model.keras')
-    >>> model = load_model('model.keras')
+    >>> save_model(model, params, model_name="my_trained_model")
+    >>> model, params, scaler_X, scaler_y, X_normTest, y_normTest, y_realTest = load_model('my_trained_model')
     
     4. Plotting distribution:
     >>> distribution_plot(data['price'])
+    
+    5. Checking for missing data:
+    >>> check_for_missing_data(data)
 
 Notes:
     - The fetch_data function fetches data in batches, handling network errors and rate limits gracefully.
     - The model save/load functions assume compatibility with Keras models.
     - The distribution_plot function uses Seaborn's histplot with KDE for data visualization.
+    - The check_for_missing_data function helps ensure no gaps in time series data, ensuring consistency for model training.
 """
+
 
 import os
 import time
 import ccxt
+import json
+import joblib
 import numpy as np
 import configparser
 from pathlib import Path
@@ -199,37 +210,92 @@ def save_data(data, file_path):
     data.to_csv(file_path, index=False)
     print(f"Dataset saved to {file_path}")
 
-def save_model(model, file_path):
+def save_model(model, params, model_name):
     """
-    Save the given model to the specified file path.
+Save the given model and its parameters to the specified file path.
 
-    Parameters:
-    model: The machine learning model to be saved. 
-    file_path (str): The path where the model will be saved.
+This function saves a machine learning model along with its associated parameters 
+to a designated directory. The model is saved in Keras `.keras` format, and the 
+parameters are saved as a JSON file.
 
-    Raises:
-    AttributeError: If the model does not have a `save` method.
-    IOError: If there is an issue saving the model to the specified file path.
+Parameters:
+    model (keras.Model): The machine learning model to be saved. It should be a Keras model with a `save` method.
+    params (dict): A dictionary containing the parameters used for training the model. This will be saved as a JSON file.
+    model_name (str): The name to be used for the saved model and parameter files. This will be used to create a directory and
+                      name the files appropriately.
+
+Raises:
+    AttributeError: If the provided model does not have a `save` method, indicating it is not a valid Keras model.
+    IOError: If there is an issue with creating directories or saving files to the specified path.
+
+Usage:
+    This function can be used after training a model to persist both the model and its configuration for later use.
+
+Example:
+    # Example usage after training a model
+    save_model(model, params, model_name="my_trained_model")
+
+    # This will create the directory '../models/my_trained_model/', 
+    # save the model in Keras format as 'model.keras', 
+    # and save the parameters in 'params.json'.
+"""
+
+    os.makedirs(os.path.dirname(f'../models/{model_name}/'), exist_ok=True)
+
+    with open(f'../models/{model_name}/params.json', 'w') as json_file:
+        json.dump(params, json_file, indent=4)
+
+    model.save(f'../models/{model_name}/model.keras')
+    print(f'Model saved to ../models/{model_name}')
+
+def load_model(model_name):
     """
-    model.save(file_path)
-    print(f"Model saved to {file_path}")
+Load a machine learning model and associated data from the specified file path.
 
-def load_model(file_path):
-    """
-    Load a machine learning model from the specified file path.
+This function loads the trained machine learning model along with its associated 
+parameters, scalers, and test data. It retrieves the model and supporting files 
+from the specified directory and returns them for further use.
 
-    Parameters:
-    file_path (str): The path to the model file to be loaded.
+Parameters:
+    model_name (str): The name of the model to be loaded. The model and supporting 
+                      files will be loaded from the directory `../models/{model_name}/`.
 
-    Returns:
-    model: The loaded machine learning model.
+Returns:
+    model (keras.Model): The loaded machine learning model.
+    params (dict): A dictionary of parameters used for training the model, loaded from `params.json`.
+    scaler_X (sklearn.preprocessing): The scaler used for normalizing the input features (X).
+    scaler_y (sklearn.preprocessing): The scaler used for normalizing the target variable (y).
+    X_normTest (numpy.ndarray): The normalized test input features.
+    y_normTest (numpy.ndarray): The normalized test target variable.
+    y_realTest (numpy.ndarray): The real test target variable (without scaling).
 
-    Raises:
-    IOError: If there is an issue loading the model from the specified file path.
-    """
-    model = internal_load_model(file_path)
-    print(f"Model loaded from {file_path}")
-    return model
+Raises:
+    IOError: If there is an issue loading any of the files (e.g., missing or corrupted files).
+    
+Usage:
+    This function can be used to load a previously saved model and its associated data 
+    for evaluation or further processing.
+
+Example:
+    # Example usage to load the model
+    model, params, scaler_X, scaler_y, X_normTest, y_normTest, y_realTest = load_model("my_trained_model")
+    
+    # This will load the model, its parameters, scalers, and test data from the directory 
+    # '../models/my_trained_model/'.
+"""
+
+    with open(f'../models/{model_name}/params.json', 'r') as json_file:
+        params = json.load(json_file)
+
+    scaler_X = joblib.load(f'../models/{model_name}/scaler_X.pkl')
+    scaler_y = joblib.load(f'../models/{model_name}/scaler_y.pkl')
+    X_normTest = joblib.load(f'../models/{model_name}/X_normTest.pkl')
+    y_normTest = joblib.load(f'../models/{model_name}/y_normTest.pkl')
+    y_realTest = joblib.load(f'../models/{model_name}/y_realTest.pkl')
+
+    model = internal_load_model(f'../models/{model_name}/model.keras', compile=False)
+    print(f'Model loaded from ../models/{model_name}')
+    return model, params, scaler_X, scaler_y, X_normTest, y_normTest, y_realTest
 
 def check_for_missing_data(df):
     """
@@ -277,72 +343,3 @@ def check_for_missing_data(df):
         print(missing_data_rows)
     else:
         print("\nNo missing data points.")
-
-def distribution_plot(*data_sets, bins=30, colors=None):
-    """
-    Plot the distribution of multiple datasets with Kernel Density Estimate (KDE) on the same plot.
-
-    Parameters:
-    *data_sets: Multiple datasets (pd.Series or np.ndarray) to plot the distributions for.
-    bins (int): The number of bins to use for the histogram. Default is 30.
-    colors (list): List of colors to use for each dataset. If None, it will automatically assign colors.
-
-    Returns:
-    None
-    """
-    if colors is None:
-        colors = sns.color_palette("Set1", len(data_sets))  # Use a color palette
-
-    # Plot distribution with KDE for each dataset
-    for i, data in enumerate(data_sets):
-        sns.histplot(data, kde=True, bins=bins, color=colors[i], label=f'Data {i+1}')
-    
-    plt.title('Distributions with KDE')
-    plt.xlabel('Value')
-    plt.ylabel('Density')
-    plt.legend()
-    plt.show()
-
-def profit_simulation(y_test_pred, y_test, threshold=0.008):
-    """
-    Simulates the profit based on predicted and actual values.
-    Parameters:
-        y_test_pred (list of tuples): A list of tuples where each tuple contains the predicted max and min values.
-        y_test (list of tuples): A list of tuples where each tuple contains the actual max and min values.
-        threshold (float, optional): The threshold value to determine if a trade should be placed. Defaults to 0.008.
-    Returns:
-        float: The total profit calculated based on the predictions and actual values.
-    Example:
-        y_test_pred = [(0.01, -0.005), (0.02, -0.01)]
-        y_test = [(0.015, -0.005), (0.025, -0.015)]
-        profit = profit_simulation(y_test_pred, y_test, threshold=0.01)
-    """
-    total_profit = 0
-    for pred, actual in zip(y_test_pred, y_test):
-        pred_max, pred_min = pred
-        actual_max, actual_min = actual
-        
-        # Check if the predicted max is above the threshold to place a trade
-        if pred_max >= threshold:
-            # Calculate the profit based on actual max and min
-            if actual_max > threshold:
-                profit = actual_max
-            else:
-                profit = pred_min
-            total_profit += profit
-    
-    return total_profit
-
-def calculate_percentage_above_threshold(y_test, threshold=0.05):
-    """
-    Calculate the percentage of values in y_test that are above the given threshold.
-
-    Parameters:
-    y_test (numpy.ndarray): The array of test values.
-    threshold (float): The threshold value to compare against.
-
-    Returns:
-    float: The percentage of values above the threshold.
-    """
-    percentage_above_threshold = np.mean(y_test[:, 0] > threshold) * 100
-    return percentage_above_threshold

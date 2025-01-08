@@ -6,32 +6,36 @@ such as forecasting price movements and training models on historical OHLCV (Ope
 Functions:
 - `create_indicators`: 
     Generates a specified number of technical indicators based on their importance from a given DataFrame containing OHLCV data. 
-    It uses the `TA-Lib` library to calculate various technical indicators like MFI, ADX, RSI, and MACD, among others, 
-    and returns a DataFrame containing the selected indicators.
+    Uses the `TA-Lib` library to calculate various technical indicators like MFI, ADX, RSI, MACD, and others, 
+    and returns a DataFrame containing the selected indicators. You can control the number of indicators 
+    and choose whether to drop some columns based on importance.
 
 - `create_targets`: 
-    Creates input windows and corresponding target values for a trading model. 
-    Given a DataFrame with a 'close' column for target prices, it calculates the maximum and minimum price percentage changes 
-    over a specified look-ahead period, which will serve as the model's target values.
+    Creates input windows and corresponding target values for training a trading model. 
+    Given a DataFrame with a 'close' column, this function calculates the maximum and minimum price percentage changes 
+    over a specified look-ahead period, which are used as the model's target values for predicting future price movement.
 
 - `normalize_X`: 
-    Normalizes one or more input datasets using a specified scaler ('MinMaxScaler', 'StandardScaler', or 'RobustScaler'). 
-    The 'close' column is excluded from normalization, and the normalized datasets are returned as pandas DataFrames.
+    Normalizes one or more input datasets using a specified scaler (`'MinMaxScaler'`, `'StandardScaler'`, or `'RobustScaler'`). 
+    The 'close' column is excluded from normalization. This function normalizes the features independently for each dataset 
+    and returns the normalized datasets as pandas DataFrames.
 
 - `normalize_y`: 
     Normalizes one or more target datasets using `MinMaxScaler` with a range of (-1, 1). 
-    The function can return the fitted scaler for later use when normalizing other datasets.
+    This function is primarily used to scale target values (e.g., price changes) and can optionally return the fitted scaler 
+    for later use when normalizing other datasets.
 
 Dependencies:
 - pandas: For handling DataFrames and time series data.
 - numpy: For handling numerical arrays.
-- scikit-learn: For normalization functions (MinMaxScaler, StandardScaler, RobustScaler).
-- TA-Lib: For calculating various technical indicators like MACD, ADX, RSI, and more.
+- scikit-learn: For normalization functions (`MinMaxScaler`, `StandardScaler`, `RobustScaler`).
+- TA-Lib: For calculating various technical indicators like MACD, ADX, RSI, and others.
 
 Usage:
-- `create_indicators` can be used to calculate a set of technical indicators that can be used as features for a trading model.
-- `create_targets` prepares target values for training the model to predict future price changes.
-- `normalize_X` and `normalize_y` are useful for scaling datasets before feeding them into machine learning models.
+- `create_indicators`: Used to calculate a set of technical indicators that can be used as features for a trading model.
+- `create_targets`: Prepares the target values for training the model to predict future price changes, such as percentage increases or decreases.
+- `normalize_X`: Scales the input features for machine learning models, ensuring that the features are on the same scale.
+- `normalize_y`: Scales the target values to the range of (-1, 1), useful for regression tasks.
 
 Example:
     # Create technical indicators for a DataFrame
@@ -42,10 +46,13 @@ Example:
     
     # Normalize the input and target datasets
     X_normalized = normalize_X(indicators_df, scaler_name='MinMaxScaler')
-    y_normalized = normalize_y(y, return_scaler=True)
+    y_normalized, scaler = normalize_y(y, return_scaler=True)
 
-Note: Ensure that the `TA-Lib` library is installed and properly configured before using these functions, as it is required for technical indicator calculations.
+Note:
+- Ensure that the `TA-Lib` library is installed and properly configured before using these functions, as it is required for technical indicator calculations.
+- The normalization functions (`normalize_X` and `normalize_y`) are crucial steps to ensure that the data fed into machine learning models is properly scaled.
 """
+
 
 import numpy as np
 import pandas as pd
@@ -205,19 +212,25 @@ scalers = {
     'RobustScaler': RobustScaler(),
 }
 
-def normalize_X(*datasets, scaler_name):
+def normalize_X(*datasets, scaler_name, return_scaler=False, specific_scaler=None):
     """
     Normalize an arbitrary number of datasets independently using the specified scaler, ignoring the 'close' column.
 
     Parameters:
     *datasets: Arbitrary number of pandas DataFrames representing datasets.
     scaler_name (str): The name of the scaler to use for normalization. Must be one of 'MinMaxScaler', 'StandardScaler', or 'RobustScaler'.
+    return_scaler (bool): Whether to return the scaler object along with the normalized datasets.
+    specific_scaler (object, optional): If provided, this scaler will be used instead of the one indicated by scaler_name.
 
     Returns:
-    Separated normalized datasets as pandas DataFrames.
+    Separated normalized datasets as pandas DataFrames, and optionally the scaler.
     """
     normalized_datasets = []
-    scaler = scalers[scaler_name]
+    
+    if specific_scaler:
+        scaler_X = specific_scaler
+    else:
+        scaler_X = scalers[scaler_name]
 
     for dataset in datasets:
         # Check if the dataset is a DataFrame
@@ -227,7 +240,7 @@ def normalize_X(*datasets, scaler_name):
             features = dataset.drop(columns=['close'])
             
             # Normalize each column in the DataFrame except 'close'
-            normalized_features = pd.DataFrame(scaler.fit_transform(features), columns=features.columns, index=features.index)
+            normalized_features = pd.DataFrame(scaler_X.fit_transform(features), columns=features.columns, index=features.index)
             
             # Add the 'close' column back to the normalized DataFrame
             normalized_data = pd.concat([normalized_features, close_column], axis=1)
@@ -235,8 +248,10 @@ def normalize_X(*datasets, scaler_name):
         else:
             raise ValueError("All datasets must be pandas DataFrames")
 
+    # Return the scaled datasets, and optionally the scaler if needed
+    if return_scaler:
+        return (*normalized_datasets, scaler_X)
     return normalized_datasets[0] if len(normalized_datasets) == 1 else tuple(normalized_datasets)
-
 
 def normalize_y(*y_datasets, return_scaler=False):
     """

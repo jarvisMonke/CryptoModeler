@@ -1,27 +1,37 @@
 """
-This module contains functions for building, training, and tuning a machine learning model using LSTM layers.
-The model predicts minimum and maximum percentage changes based on historical data. The module integrates with
-Optuna for hyperparameter tuning and includes early stopping, data slicing, and custom callbacks for model training.
+This module provides functionality for building, training, and tuning an LSTM-based machine learning model for predicting
+minimum and maximum percentage changes from historical data. It integrates with Optuna for hyperparameter optimization,
+supports early stopping, includes dynamic data slicing for training and validation, and offers custom callbacks during training.
 
 Functions:
 create_model(input_shape, params_grid) -> keras.models.Sequential
-    - Builds and compiles a Sequential LSTM model based on the provided input shape and hyperparameters.
+    - Builds and compiles a Sequential LSTM model for time series forecasting based on the provided input shape and hyperparameters.
     
 data_slicer(X, y, epoch, train_size, val_size, step_size) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
-    - Slices the data using a rolling window technique, creating training and validation sets for each epoch.
+    - Slices the dataset into rolling training and validation sets for each epoch.
     
 optuna_pruning_and_callbacks(trial, model, X_train_epoch, y_train_epoch, X_val_epoch, y_val_epoch, params_grid, epoch_counter, early_stopping) -> History
-    - Handles Optuna pruning and callbacks during model training, including checks for NaNs and validation loss monitoring.
+    - Manages Optuna pruning and applies callbacks for model training, including validation loss monitoring and early stopping.
     
 train(X, y, params, epochs=50, train_size=3000, val_size=500, step_size=200, tuning=False, trial=None) -> keras.models.Sequential
-    - Trains the LSTM model using dynamic data slicing for each epoch and optional Optuna hyperparameter tuning. 
-    - Incorporates early stopping to prevent overfitting.
+    - Trains an LSTM model with dynamic data slicing for each epoch, optionally performing hyperparameter tuning with Optuna.
+    - Includes early stopping to prevent overfitting.
     
-Note:
-- The module supports LSTM-based time series forecasting with dynamic data slicing for each epoch.
-- The `train` function offers flexibility to either perform hyperparameter tuning using Optuna or train the model without it.
-- The `optuna_pruning_and_callbacks` function integrates Optuna's pruning mechanism to stop unpromising trials early.
-- Early stopping is used to halt training when the validation loss does not improve for a defined number of epochs.
+load_model_test_split(filenames, params, model_data_ratio=0.8) -> Tuple[pd.DataFrame, pd.DataFrame]
+    - Loads data, creates technical indicators, and splits it into training and testing sets based on a specified ratio.
+    
+test_data(df, params, model_name=None) -> Tuple[np.ndarray, np.ndarray, np.ndarray]
+    - Processes and normalizes the test data, optionally saving the normalized data and real targets to disk.
+
+custom_model(df, params, model_name=None, tuning=False, trial=None) -> keras.models.Sequential
+    - Trains a custom LSTM model using the provided dataframe and parameters, with options for Optuna tuning and model saving.
+
+Notes:
+- This module facilitates the building and training of an LSTM-based model for time series forecasting tasks.
+- The `train` function supports dynamic data slicing to process the training data in smaller rolling windows, improving model robustness.
+- Optuna integration allows for hyperparameter tuning to optimize the model’s performance.
+- Early stopping is employed to avoid overfitting, halting training when the validation loss fails to improve for a certain number of epochs.
+- The module includes preprocessing functions for handling both features and targets, enabling better model generalization.
 
 Example usage:
 
@@ -32,12 +42,10 @@ model = train(X, y, params, epochs=50, train_size=3000, val_size=500, step_size=
 model = train(X, y, params, epochs=50, train_size=3000, val_size=500, step_size=200, tuning=True, trial=trial)
 """
 
+
 # Import necessary libraries
-import numpy as np
-import optuna
+import os
 import joblib
-import tensorflow as tf
-from optuna.integration import KerasPruningCallback  
 from tensorflow.keras.optimizers import RMSprop
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
@@ -96,133 +104,35 @@ def create_model(input_shape, params_grid):
 
     return model
 
-def data_slicer(X, y, epoch, train_size, val_size, step_size):
-    """
-    Slice the data for the current epoch using a rolling window, create targets, and normalize it.
-
-    Parameters:
-    - X (np.ndarray): Input feature data.
-    - y (np.ndarray): Input target data.
-    - window_size (int): Size of the rolling window for feature generation.
-    - look_ahead (int): Number of steps to look ahead for the target variable.
-    - epoch (int): Current epoch number, used to calculate the starting index for slicing.
-    - train_size (int): Number of samples to include in the training set.
-    - val_size (int): Number of samples to include in the validation set.
-    - step_size (int): The size of the shift for each rolling window (how many steps to move each time).
-    
-    Returns:
-    - X_train_epoch (np.ndarray): Feature data slice for the training set in the current epoch.
-    - y_train_epoch (np.ndarray): Target data slice for the training set in the current epoch.
-    - X_val_epoch (np.ndarray): Feature data slice for the validation set in the current epoch.
-    - y_val_epoch (np.ndarray): Target data slice for the validation set in the current epoch.
-
-    Notes:
-    - The function ensures that the slicing does not go out of bounds of the input dataframe.
-    - The `create_targets` function is expected to generate feature-target pairs based on the rolling window.
-    - The `normalize_y` function is expected to normalize the target values (y) for both training and validation.
-    """
-    # Calculate start and end indices for the data slicing
-    train_start = epoch * step_size
-    train_end = train_start + train_size
-    
-    val_start = train_end
-    val_end = val_start + val_size
-    
-    # Ensure we do not go out of bounds
-    if val_end > len(X):
-        return None, None, None, None
-    
-    X_train_epoch = X[train_start:val_end]
-    y_train_epoch = y[train_start:val_end]
-
-    X_val_epoch = X[val_start:val_end]
-    y_val_epoch = y[val_start:val_end]
-
-    return X_train_epoch, y_train_epoch, X_val_epoch, y_val_epoch
-
-def optuna_pruning_and_callbacks(trial, model, X_train_epoch, y_train_epoch, X_val_epoch, y_val_epoch, params_grid, epoch_counter, early_stopping):
-    """
-    Handle Optuna pruning and callbacks for model training.
-    
-    Parameters:
-    - trial (optuna.trial.Trial): The current Optuna trial object.
-    - model: The model to be trained.
-    - X_train_epoch (np.ndarray): Training data for the current epoch.
-    - y_train_epoch (np.ndarray): Target data for the current epoch.
-    - X_val_epoch (np.ndarray): Validation data for the current epoch.
-    - y_val_epoch (np.ndarray): Target data for validation.
-    - params_grid (dict): Dictionary of hyperparameters for model.
-    - epoch_counter (int): The current epoch counter.
-    - early_stopping (EarlyStopping): Early stopping callback.
-    
-    Returns:
-    - history: Training history of the current epoch.
-    """
-    
-    # Callback to check NaNs in logs during training
-    class NaNChecker(tf.keras.callbacks.Callback):
-        def __init__(self, trial):
-            super().__init__()
-            self.trial = trial
-
-        def on_batch_end(self, batch, logs=None):
-            if logs is not None and any(np.isnan(value) for value in logs.values()):
-                print("NaN detected, pruning trial.")
-                raise optuna.exceptions.TrialPruned()
-
-    # Initialize NaNChecker
-    nan_checker = NaNChecker(trial)
-
-    # Use Optuna's KerasPruningCallback to prune the trial if necessary
-    #pruning_callback = KerasPruningCallback(trial, 'val_loss')  # Monitor 'val_loss' for pruning
-
-    # Now train the same model on the new data for this epoch (do not reinitialize model)
-    history = model.fit(
-        X_train_epoch,
-        y_train_epoch,
-        epochs=1,  # Train for 1 epoch at a time in this loop
-        batch_size=params_grid["batch_size"],
-        validation_data=(X_val_epoch, y_val_epoch),  # Provide the new validation data
-        verbose=1,
-        callbacks=[early_stopping, nan_checker] #, pruning_callback]
-    )
-
-    # Check if Optuna should prune the trial
-    if trial.should_prune():
-        raise optuna.exceptions.TrialPruned()
-
-    return history
-
-
-def train(X, y, params, epochs=50, train_size=3000, val_size=500, step_size=200, tuning=False, trial=None):
+def train(X, y, params, tuning=False, trial=None):
     """
     Train the model with early stopping, data slicing, and optional Optuna hyperparameter tuning.
+
     Parameters:
-    - model_df (pd.DataFrame): Input dataframe containing the training and validation data.
-    - params (dict): Dictionary containing the model parameters, such as 'window_size', 'num_indicators', etc.
-    - epochs (int): Total number of epochs to train. Default is 50.
-    - train_size (int): Number of training samples per epoch. Default is 3000.
-    - val_size (int): Number of validation samples per epoch. Default is 500.
-    - step_size (int): The size of the shift for each rolling window in the data. Default is 200.
-    - tuning (bool): Flag to indicate if Optuna hyperparameter tuning should be applied. Default is False.
+    - X (pd.DataFrame or np.array): Input feature data for training and validation.
+    - y (pd.Series or np.array): Target labels for training and validation.
+    - params (dict): Dictionary containing the model parameters, such as 'window_size', 'num_indicators', 'epochs', 
+      'train_size', 'val_size', 'step_size', and other hyperparameters for model creation.
+    - tuning (bool, optional): Flag to indicate if Optuna hyperparameter tuning should be applied. Default is False.
     - trial (optuna.trial.Trial, optional): The Optuna trial object to track the tuning process if `tuning=True`.
 
     Returns:
     - model: The trained model after completing the specified number of epochs or early stopping.
-    
+
     Notes:
     - The function supports both training with and without Optuna-based hyperparameter tuning.
     - Uses early stopping to prevent overfitting by monitoring validation loss and restoring the best model weights.
     - The `data_slicer` function slices the dataset into training and validation sets for each epoch using a rolling window.
-    - The model is trained for one epoch at a time to update the training and validation data dynamically.
+    - The model is trained for one epoch at a time, updating the training and validation data dynamically.
     - If early stopping is triggered, training is stopped prematurely.
 
     Example:
     ```python
-    model = train(model_df, params, epochs=50, train_size=3000, val_size=500, step_size=200, tuning=True, trial=trial)
+    model = train(X, y, params, tuning=True, trial=trial)
     ```
     """
-    
+    from utils.tuning import optuna_pruning_and_callbacks
+
     # model params
     model_keys = [
         'lstm_units_1', 'lstm_units_2', 'dropout', 'learning_rate', 'batch_size',
@@ -242,9 +152,9 @@ def train(X, y, params, epochs=50, train_size=3000, val_size=500, step_size=200,
     epoch_counter = 0  # Track total epochs across windows
 
     # Loop through epochs and update train and validation data
-    for epoch in range(epochs):
+    for epoch in range(params['epochs']):
         # Get the new training and validation data slices for the current epoch
-        X_train_epoch, y_train_epoch, X_val_epoch, y_val_epoch = data_slicer(X, y, epoch, train_size, val_size, step_size)
+        X_train_epoch, y_train_epoch, X_val_epoch, y_val_epoch = data_slicer(X, y, epoch, params['train_size'], params['val_size'], params['step_size'])
         
         if X_train_epoch is None:
             print("Reached end of data, stopping training.")
@@ -326,6 +236,8 @@ def test_data(df, params, model_name=None):
     norm_y_test = normalize_y(y_test)
     
     if model_name is not None:
+        os.makedirs(os.path.dirname(f'../models/{model_name}/'), exist_ok=True)
+
         joblib.dump(norm_X_test, f'../models/{model_name}/X_normTest.pkl')
         joblib.dump(norm_y_test, f'../models/{model_name}/y_normTest.pkl')
         joblib.dump(y_test, f'../models/{model_name}/y_realTest.pkl')
@@ -335,33 +247,100 @@ def test_data(df, params, model_name=None):
 
 def custom_model(df, params, model_name=None, tuning=False, trial=None):
     """
-    Trains a custom model using the provided dataframe and parameters.
-    
+    Trains a custom model using the provided dataframe and parameters, and optionally saves the scaler for future use.
+
     Parameters:
-        df (pd.DataFrame): The input dataframe containing the data.
-        params (dict): A dictionary of parameters for the model, including:
-            - 'scaler_type' (str): The type of scaler to use for normalization.
-            - 'window_size' (int): The size of the window for creating features.
-            - 'look_ahead_size' (int): The size of the look-ahead window for creating targets.
-        model_name (str, optional): The name of the model for saving the scaler. Defaults to None.
-        tuning (bool, optional): Whether the model is being tuned. Defaults to False.
-        trial (optuna.trial.Trial, optional): The trial object for hyperparameter tuning. Defaults to None.
+    - df (pd.DataFrame): The input dataframe containing the data.
+    - params (dict): A dictionary of parameters for the model, including:
+        - 'scaler_type' (str): The type of scaler to use for normalization (e.g., 'StandardScaler', 'MinMaxScaler').
+        - 'window_size' (int): The size of the window for creating features.
+        - 'look_ahead_size' (int): The size of the look-ahead window for creating targets.
+    - model_name (str, optional): The name of the model for saving the scaler. Defaults to None. If provided, saves the scalers to the specified path.
+    - tuning (bool, optional): Whether the model is being tuned using Optuna. Defaults to False.
+    - trial (optuna.trial.Trial, optional): The Optuna trial object for hyperparameter tuning, if `tuning=True`. Defaults to None.
+
     Returns:
-        - model: The trained model.
-        - scaler_y: The scaler used to normalize the target
+    - model: The trained model.
+    - scaler_y (optional): The scaler used to normalize the target, returned only if `tuning=True`.
+
+    Notes:
+    - The function performs preprocessing on the data using the specified scaler and creates features/targets with the given window sizes.
+    - If `model_name` is provided, the scaler objects for features (`scaler_X`) and target (`scaler_y`) are saved to disk.
+    - Supports hyperparameter tuning with Optuna if `tuning=True`, and returns the trained model and target scaler.
+    - The model is trained using the `train` function, which incorporates early stopping and optional Optuna-based tuning.
+
+    Example:
+    ```python
+    model, scaler_y = custom_model(df, params, model_name="my_model", tuning=True, trial=trial)
+    ```
     """
 
     # Load data and create indicators
-    model_df = normalize_X(df, scaler_name=params['scaler_type'])
+    model_df, scaler_X = normalize_X(df, scaler_name=params['scaler_type'], return_scaler=True)
     X_train, y_train = create_targets(model_df, params['window_size'], params['look_ahead_size'], params['look_ahead_size'])
     
     y_train, scaler_y = normalize_y(y_train, return_scaler=True)
     
     if model_name is not None:
+        os.makedirs(os.path.dirname(f'../models/{model_name}/'), exist_ok=True)
+        
+        joblib.dump(scaler_X, f'../models/{model_name}/scaler_X.pkl')
         joblib.dump(scaler_y, f'../models/{model_name}/scaler_y.pkl')
-        print('Scaler dumped')
+        print('Scalers dumped')
     
     # Train
     model = train(X_train, y_train, params, epochs=50, train_size=3000, val_size=500, step_size=200, tuning=tuning, trial=trial) 
     
-    return model, scaler_y
+    if tuning:
+        return model, scaler_y
+    else:
+        return model
+    
+
+def data_slicer(X, y, epoch, train_size, val_size, step_size):
+    """
+    Slice the data for the current epoch using a rolling window, create training and validation sets, and return them.
+
+    Parameters:
+    - X (np.ndarray): Input feature data.
+    - y (np.ndarray): Input target data.
+    - epoch (int): The current epoch number, used to calculate the starting index for slicing.
+    - train_size (int): Number of samples to include in the training set.
+    - val_size (int): Number of samples to include in the validation set.
+    - step_size (int): The size of the shift for each rolling window (i.e., how many steps to move each time).
+
+    Returns:
+    - X_train_epoch (np.ndarray): Feature data slice for the training set in the current epoch.
+    - y_train_epoch (np.ndarray): Target data slice for the training set in the current epoch.
+    - X_val_epoch (np.ndarray): Feature data slice for the validation set in the current epoch.
+    - y_val_epoch (np.ndarray): Target data slice for the validation set in the current epoch.
+
+    Notes:
+    - This function performs data slicing based on the provided window size, step size, and epoch number.
+    - It ensures the slicing does not go out of bounds by checking the indices before accessing the data.
+    - The sliced data for both training and validation sets is used for one epoch of training.
+    - If the slicing would exceed the bounds of the input data, `None` is returned for all outputs, signaling the end of the data.
+
+    Example:
+    ```python
+    X_train_epoch, y_train_epoch, X_val_epoch, y_val_epoch = data_slicer(X, y, epoch=0, train_size=3000, val_size=500, step_size=200)
+    ```
+    """
+    # Calculate start and end indices for the data slicing
+    train_start = epoch * step_size
+    train_end = train_start + train_size
+    
+    val_start = train_end
+    val_end = val_start + val_size
+    
+    # Ensure we do not go out of bounds
+    if val_end > len(X):
+        return None, None, None, None
+    
+    X_train_epoch = X[train_start:val_end]
+    y_train_epoch = y[train_start:val_end]
+
+    X_val_epoch = X[val_start:val_end]
+    y_val_epoch = y[val_start:val_end]
+
+    return X_train_epoch, y_train_epoch, X_val_epoch, y_val_epoch

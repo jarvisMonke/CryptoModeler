@@ -1,0 +1,17 @@
+{
+    "lstm_units_1": 64,
+    "lstm_units_2": 64,
+    "dropout": 0.5,
+    "learning_rate": 0.002925417243613031,
+    "batch_size": 32,
+    "dense_units": 32,
+    "sequence_length": 10,
+    "gradient_clipping": 2.0,
+    "optimizer": "adam",
+    "activation": "tanh",
+    "num_indicators": 39,
+    "scaler_type": "MinMaxScaler",
+    "timeframe": "1m",
+    "window_size": 80,
+    "look_ahead_size": 20
+}
