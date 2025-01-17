@@ -4,3 +4,4 @@ logs/
 config/config.ini
 __pycache__/
 *.pyc
+models/*

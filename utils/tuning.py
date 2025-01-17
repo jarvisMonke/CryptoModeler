@@ -100,11 +100,20 @@ Note:
 
         "scaler_type" : trial.suggest_categorical('scaler_type', ['MinMaxScaler', 'StandardScaler', 'RobustScaler']),
  
-        'window_size' : config.get("window_size", 20),
-        'look_ahead_size' : config.get("look_ahead_size", 5),
-        'crypto' : config.get("crypto", "BTC"),
+        'window_size' : config.get("window_size", trial.suggest_categorical('window_size', [20, 40, 60, 80, 100])),
+        'look_ahead_size' : config.get("look_ahead_size", 20),
+        'window_shift': config.get("window_shift", trial.suggest_categorical('window_shift', [1, 5, 10, 15, 20])),
+
+        'crypto' : config.get("crypto", "ETH"),
         'timeframe' : config.get("timeframe", "1m"),
-        'timeframe_filenames' : config.get("timeframe_filenames"), 
+        'timeframe_filenames' : config.get("timeframe_filenames"),
+        'epochs' : config.get("epochs", 50),
+
+        'train_size' : config.get("train_size", trial.suggest_categorical('train_size', [1000, 2000, 3000, 5000, 10000, 20000])),
+        'val_size' : config.get("val_size", 500),
+        'step_size' : config.get("step_size", trial.suggest_categorical('step_size',[100, 200, 300, 500, 1000, 2000, 3000, 5000, 10000, 20000])),
+        
+        'shuffle' : config.get("shuffle", True)
     }
 
     model_df, test_df = load_model_test_split(params['timeframe_filenames'], params)

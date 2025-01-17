@@ -45,6 +45,7 @@ model = train(X, y, params, epochs=50, train_size=3000, val_size=500, step_size=
 
 # Import necessary libraries
 import os
+import numpy as np
 import joblib
 from tensorflow.keras.optimizers import RMSprop
 from tensorflow.keras.optimizers import Adam
@@ -52,6 +53,7 @@ from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.initializers import HeNormal
 from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.models import Model
 from utils.preprocess import normalize_X, normalize_y, create_targets, create_indicators
 from utils.helpers import load_data
 
@@ -75,24 +77,28 @@ def create_model(input_shape, params_grid):
     Returns:
     keras.models.Sequential: Compiled LSTM-based neural network model.
     """
-    model = Sequential()
-
     # Input layer
-    model.add(Input(shape=input_shape))
+    inputs = Input(shape=input_shape)
 
     # First LSTM layer with dropout
-    model.add(LSTM(params_grid["lstm_units_1"], activation=params_grid["activation"], kernel_initializer=HeNormal(), return_sequences=True))
-    model.add(Dropout(params_grid["dropout"]))
+    x = LSTM(params_grid["lstm_units_1"], activation=params_grid["activation"], 
+             kernel_initializer=HeNormal(), return_sequences=True)(inputs)
+    x = Dropout(params_grid["dropout"])(x)
 
     # Second LSTM layer with dropout
-    model.add(LSTM(params_grid["lstm_units_2"], activation=params_grid["activation"], kernel_initializer=HeNormal(), return_sequences=False))
-    model.add(Dropout(params_grid["dropout"]))
+    x = LSTM(params_grid["lstm_units_2"], activation=params_grid["activation"], 
+             kernel_initializer=HeNormal(), return_sequences=False)(x)
+    x = Dropout(params_grid["dropout"])(x)
 
     # Dense layer
-    model.add(Dense(params_grid["dense_units"], activation=params_grid["activation"]))
+    x = Dense(params_grid["dense_units"], activation=params_grid["activation"])(x)
 
-    # Output layer with 2 units for predicted min and max percentage change
-    model.add(Dense(2))
+    # Output heads
+    output_min = Dense(1, name='max_change')(x)  # Head for min percentage change
+    output_max = Dense(1, name='min_change')(x)  # Head for max percentage change
+
+    # Create the model
+    model = Model(inputs=inputs, outputs=[output_max, output_min])
 
     # Select optimizer and compile the model
     if params_grid["optimizer"] == 'adam':
@@ -100,8 +106,11 @@ def create_model(input_shape, params_grid):
     else:
         optimizer = RMSprop(learning_rate=params_grid["learning_rate"], clipvalue=params_grid["gradient_clipping"])
 
-    model.compile(optimizer=optimizer, loss='mean_squared_error', metrics=['mae'])
-
+    model.compile(
+    optimizer=optimizer,
+    loss=['mse', 'mse'],  # Assuming you want to use mean squared error for both outputs
+    metrics=[['mae'], ['mae']]  # Provide a list of metrics for each output
+)
     return model
 
 def train(X, y, params, tuning=False, trial=None):
@@ -155,22 +164,30 @@ def train(X, y, params, tuning=False, trial=None):
     for epoch in range(params['epochs']):
         # Get the new training and validation data slices for the current epoch
         X_train_epoch, y_train_epoch, X_val_epoch, y_val_epoch = data_slicer(X, y, epoch, params['train_size'], params['val_size'], params['step_size'])
-        
+
         if X_train_epoch is None:
             print("Reached end of data, stopping training.")
             break
         
+        # Split the tuples into two arrays
+        y_max_train_epoch = np.array([y[0] for y in y_train_epoch])
+        y_min_train_epoch = np.array([y[1] for y in y_train_epoch])
+
+        y_max_val_epoch = np.array([y[0] for y in y_val_epoch])
+        y_min_val_epoch = np.array([y[1] for y in y_val_epoch])
+
         if tuning:
             # Call Optuna-specific logic if tuning is enabled
-            history = optuna_pruning_and_callbacks(trial, model, X_train_epoch, y_train_epoch, X_val_epoch, y_val_epoch, params_grid, epoch_counter, early_stopping)
+            history = optuna_pruning_and_callbacks(trial, model, X_train_epoch, [y_max_train_epoch, y_min_train_epoch], X_val_epoch, [y_max_val_epoch, y_min_val_epoch], params_grid, epoch_counter, early_stopping)
         else:
+
             # Train the model without Optuna
             history = model.fit(
                 X_train_epoch,
-                y_train_epoch,
+                [y_max_train_epoch, y_min_train_epoch],
                 epochs=1,  # Train for 1 epoch at a time in this loop
                 batch_size=params_grid["batch_size"],
-                validation_data=(X_val_epoch, y_val_epoch),  # Provide the new validation data
+                validation_data=(X_val_epoch, [y_max_val_epoch, y_min_val_epoch]),  # Provide the new validation data
                 verbose=1,
                 callbacks=[early_stopping]
             )
@@ -232,7 +249,7 @@ def test_data(df, params, model_name=None):
     test_df = normalize_X(df, scaler_name=params['scaler_type'])
 
     # Testing data special treatment
-    norm_X_test, y_test = create_targets(test_df, params['window_size'], params['look_ahead_size'], params['look_ahead_size'])
+    norm_X_test, y_test = create_targets(test_df, params['window_size'], params['look_ahead_size'], params['window_shift'])
     norm_y_test = normalize_y(y_test)
     
     if model_name is not None:
@@ -288,8 +305,19 @@ def custom_model(df, params, model_name=None, tuning=False, trial=None):
         joblib.dump(scaler_y, f'../models/{model_name}/scaler_y.pkl')
         print('Scalers dumped')
     
+    if params['shuffle']:
+        # Set a random seed for reproducibility
+        np.random.seed(42)
+
+        # Assuming X has shape (samples, window_size, features) and y has shape (samples,)
+        indices = np.arange(X_train.shape[0])
+        np.random.shuffle(indices)
+
+        X_train = X_train[indices]
+        y_train = y_train[indices]
+
     # Train
-    model = train(X_train, y_train, params, epochs=50, train_size=3000, val_size=500, step_size=200, tuning=tuning, trial=trial) 
+    model = train(X_train, y_train, params, tuning=tuning, trial=trial) 
     
     if tuning:
         return model, scaler_y

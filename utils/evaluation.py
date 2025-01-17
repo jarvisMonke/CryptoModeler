@@ -110,7 +110,7 @@ def profit_simulation(y_pred, y_real, threshold=0.008):
                 profit = actual_max
             else:
                 profit = pred_min
-            total_profit += profit
+            total_profit += profit - 0.006 - 0.004*(1+profit)
     
     return total_profit
 
