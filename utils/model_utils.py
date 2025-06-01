@@ -4,6 +4,7 @@ import time
 import talib
 import os
 import numpy as np
+from pathlib import Path
 import tensorflow as tf
 import optuna
 import matplotlib.pyplot as plt
@@ -24,8 +25,16 @@ from tensorflow.keras.initializers import HeNormal
 from optuna.integration import KerasPruningCallback  
 from optuna.exceptions import TrialPruned
 
+# Set up the path to the config file
+config_path = Path(__file__).resolve().parents[1] / 'config' / 'config.ini'
+
+# Ensure the config file exists
+if not config_path.exists():
+    raise FileNotFoundError(f"Config file not found at {config_path}.")
+
+# Create a ConfigParser instance and read the config file
 config = configparser.ConfigParser()
-config.read('config.ini')
+config.read(config_path)
 
 # Fetch the data
 def fetch_data(symbol, timeframe, start_date, end_date):
@@ -125,7 +134,8 @@ class CryptoDataset:
         # If no custom file path is provided, use the default or generate the default path
         if file_path is None:
             if self.default_file_path is None:
-                file_path = f'data/{self.symbol.replace("/","")}_{self.timeframe}_v{self.version}.csv'
+                # TODO save to the proper directory
+                file_path = f'./data/{self.symbol.replace("/","")}_{self.timeframe}_v{self.version}.csv'
             else:
                 file_path = self.default_file_path
 

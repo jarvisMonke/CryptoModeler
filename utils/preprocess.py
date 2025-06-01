@@ -108,8 +108,6 @@ def create_indicators(dataframe, drop):
         'PPO': lambda df: talib.PPO(df['close']),
         'ROC': lambda df: talib.ROC(df['close']),
         'ROCP': lambda df: talib.ROCP(df['close']),
-        'ROCR': lambda df: talib.ROCR(df['close']),
-        'ROCR100': lambda df: talib.ROCR100(df['close']),
         'RSI': lambda df: talib.RSI(df['close']),
         'STOCH_k': lambda df: talib.STOCH(df['high'], df['low'], df['close'])[0],
         'STOCH_d': lambda df: talib.STOCH(df['high'], df['low'], df['close'])[1],
