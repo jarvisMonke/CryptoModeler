@@ -203,6 +203,45 @@ def create_targets(df, window_size, look_ahead, shift=1):
     
     return X, y
 
+def create_classification_targets(df, horizon=32, up_th=0.5, down_th=-0.5, lookback=96):
+    close = df['close'].values
+    """
+    Create classification input windows and corresponding directional labels for a trading model.
+    
+    Parameters:
+    df (pd.DataFrame): DataFrame containing the time series data with a 'close' column and other features.
+    horizon (int): Number of future time steps to look ahead for computing percentage change.
+    up_th (float): Threshold (%) above which the movement is considered a "buy" signal (label = 1).
+    down_th (float): Threshold (%) below which the movement is considered a "sell" signal (label = -1).
+    lookback (int): Number of past timesteps to include in each input window.
+    
+    Returns:
+    tuple: A tuple containing:
+        - X_windows (np.ndarray): Array of input windows with shape (num_windows, lookback, num_features).
+        - labels (np.ndarray): Array of integer labels with shape (num_windows,) where:
+            - 1 = buy signal (future return > up_th)
+            - -1 = sell signal (future return < down_th)
+            - 0 = hold/neutral
+    """
+
+    # Compute future percentage changes
+    future_returns = ((close[lookback + horizon:] - close[lookback:-horizon]) / close[lookback:-horizon]) * 100
+
+    # Create labels
+    labels = np.zeros(len(future_returns), dtype=int)
+    labels[future_returns > up_th] = 1
+    labels[future_returns < down_th] = -1
+
+    # Create feature windows
+    raw_data = df.values
+    X_windows = np.lib.stride_tricks.sliding_window_view(raw_data, (lookback, raw_data.shape[1]))
+    X_windows = X_windows.squeeze()  # remove extra dimension
+
+    # Align shapes
+    X_windows = X_windows[lookback : len(future_returns) + lookback]
+
+    return X_windows, labels
+
 # Define the scalers
 scalers = {
     'MinMaxScaler': MinMaxScaler(),
